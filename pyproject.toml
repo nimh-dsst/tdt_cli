@@ -1,0 +1,28 @@
+[project]
+name = "tdt-cli"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=2.0.2",
+    "pandas>=2.3.3",
+    "scipy>=1.13.1",
+    "statsmodels>=0.14.6",
+    "tdt>=0.7.3",
+]
+
+[project.scripts]
+tank-cli = "tank_cli.cli:main"
+
+[dependency-groups]
+tests = [
+    "pytest>=8.4.2",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["tank_cli*"]
