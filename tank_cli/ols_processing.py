@@ -51,6 +51,11 @@ def run_ols_processing(
                 "TTL values must be either 0 or 1 after downsampling"
             )
         ttl_index: NDArray[np.bool_] = ttl_int == 1
+        if ttl_index.size != smoothed_exp.size:
+            raise ValueError(
+                "TTL mask length does not match smoothed signal length "
+                f"(ttl={ttl_index.size}, signal={smoothed_exp.size})"
+            )
         if not np.any(ttl_index):
             raise ValueError(
                 "No TTL==1 samples found after downsampling; cannot trim"

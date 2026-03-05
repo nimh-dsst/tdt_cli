@@ -169,7 +169,11 @@ def run_cli(args: argparse.Namespace) -> None:
 
 def _validate_flag_combinations(args: argparse.Namespace) -> None:
     if args.num_subjects == 1:
-        if args.second_iso is not None or args.second_exp is not None:
+        if (
+            args.second_iso is not None
+            or args.second_exp is not None
+            or args.second_ttl != "None"
+        ):
             raise ValueError(
                 "second-subject flags are not allowed when --num-subjects=1"
             )
@@ -329,18 +333,25 @@ def _export_ols_csv(
 ) -> None:
     iso = row_data["streams"][iso_stream]
     exp = row_data["streams"][exp_stream]
+    iso_fs = float(iso["fs"])
+    exp_fs = float(exp["fs"])
     ttl_data = None
     ttl_fs = None
     if ttl_stream != "None":
         ttl = row_data["streams"][ttl_stream]
         ttl_data = ttl["data"]
         ttl_fs = float(ttl["fs"])
+        if not (iso_fs == exp_fs == ttl_fs):
+            raise ValueError(
+                "iso, exp, and ttl stream sampling rates must match "
+                f"(got iso={iso_fs}, exp={exp_fs}, ttl={ttl_fs})"
+            )
 
     results = run_ols_processing(
         iso_data=iso["data"],
         exp_data=exp["data"],
-        iso_fs=float(iso["fs"]),
-        exp_fs=float(exp["fs"]),
+        iso_fs=iso_fs,
+        exp_fs=exp_fs,
         smoothing_method=smoothing_method,
         smoothing_fraction=smoothing_fraction,
         new_sampling_rate=new_sampling_rate,

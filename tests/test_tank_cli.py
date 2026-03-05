@@ -2,9 +2,11 @@ import os
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import tdt
+import tank_cli.cli as cli_module
 
 from tank_cli import (
     DEFAULT_NEW_SAMPLING_RATE,
@@ -14,6 +16,7 @@ from tank_cli import (
     build_parser,
     main,
 )
+from tank_cli.cli import _export_ols_csv
 
 
 @pytest.fixture(scope="session")
@@ -111,6 +114,25 @@ def test_rejects_second_subject_flags_when_one_subject(
     assert code == 1
 
 
+def test_rejects_second_ttl_when_one_subject(tmp_path: Path) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    args = [
+        "--tank-dir",
+        str(tank_dir),
+        "--num-subjects",
+        "1",
+        "--first-iso",
+        "iso",
+        "--first-exp",
+        "exp",
+        "--second-ttl",
+        "ttl",
+    ]
+    code = main(args)
+    assert code == 1
+
+
 def test_export_epoc_requires_epoc_name(
     tank_dir: Path, tmp_path: Path
 ) -> None:
@@ -196,3 +218,69 @@ def test_unknown_stream_name_fails(tank_dir: Path, tmp_path: Path) -> None:
     args[7] = "not_a_stream"
     code = main(args)
     assert code == 1
+
+
+def test_export_ols_rejects_mismatched_stream_fs(tmp_path: Path) -> None:
+    row_data = {
+        "streams": {
+            "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "ttl": {"data": np.array([0.0, 1.0], dtype=np.float32), "fs": 5.0},
+        }
+    }
+
+    with pytest.raises(ValueError, match="sampling rates must match"):
+        _export_ols_csv(
+            row_data=row_data,
+            subject_dir=tmp_path,
+            iso_stream="iso",
+            exp_stream="exp",
+            ttl_stream="ttl",
+            smoothing_method=DEFAULT_SMOOTHING_METHOD,
+            smoothing_fraction=DEFAULT_SMOOTHING_FRACTION,
+            new_sampling_rate=DEFAULT_NEW_SAMPLING_RATE,
+            ttl_filtering=False,
+            ttl_start_offset=DEFAULT_TTL_START_OFFSET,
+        )
+
+
+def test_export_ols_allows_matching_stream_fs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row_data = {
+        "streams": {
+            "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "ttl": {"data": np.array([0.0, 1.0], dtype=np.float32), "fs": 10.0},
+        }
+    }
+
+    def fake_run_ols_processing(**_: object) -> dict[str, np.ndarray]:
+        return {
+            "time_array": np.array([0.0, 0.1], dtype=np.float64),
+            "smoothed_exp": np.array([1.0, 2.0], dtype=np.float64),
+            "smoothed_iso": np.array([1.0, 2.0], dtype=np.float64),
+            "delta_f": np.array([0.1, 0.2], dtype=np.float64),
+            "delta_f_norm": np.array([0.01, 0.02], dtype=np.float64),
+            "delta_f_zscore": np.array([-1.0, 1.0], dtype=np.float64),
+        }
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_ols_processing",
+        fake_run_ols_processing,
+    )
+
+    _export_ols_csv(
+        row_data=row_data,
+        subject_dir=tmp_path,
+        iso_stream="iso",
+        exp_stream="exp",
+        ttl_stream="ttl",
+        smoothing_method=DEFAULT_SMOOTHING_METHOD,
+        smoothing_fraction=DEFAULT_SMOOTHING_FRACTION,
+        new_sampling_rate=DEFAULT_NEW_SAMPLING_RATE,
+        ttl_filtering=False,
+        ttl_start_offset=DEFAULT_TTL_START_OFFSET,
+    )
+    assert (tmp_path / "ols_processed.csv").exists()
