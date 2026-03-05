@@ -6,7 +6,11 @@
 
 Python requirement: `>=3.11`
 
+Use the command block for your OS.
+
 ### Recommended: UV workflow
+
+#### Unix/macOS
 
 ```bash
 # from repo root
@@ -14,13 +18,34 @@ uv sync
 uv run tank-cli --help
 ```
 
-Run as a module if preferred:
-
 ```bash
 uv run python -m tank_cli --help
 ```
 
+#### Windows (PowerShell)
+
+```powershell
+# from repo root
+uv sync
+uv run tank-cli --help
+```
+
+```powershell
+uv run python -m tank_cli --help
+```
+
+#### Windows (cmd.exe)
+
+```cmd
+REM from repo root
+uv sync
+uv run tank-cli --help
+uv run python -m tank_cli --help
+```
+
 ### pip / venv workflow
+
+#### Unix/macOS
 
 ```bash
 python -m venv .venv
@@ -30,7 +55,29 @@ pip install -e .
 tank-cli --help
 ```
 
+#### Windows (PowerShell)
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -e .
+tank-cli --help
+```
+
+#### Windows (cmd.exe)
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate.bat
+python -m pip install -U pip
+python -m pip install -e .
+tank-cli --help
+```
+
 ### Quick usage example
+
+#### Unix/macOS
 
 ```bash
 tank-cli \
@@ -38,6 +85,28 @@ tank-cli \
   --num-subjects 1 \
   --first-iso _4054 \
   --first-exp _4654 \
+  --run-ols
+```
+
+#### Windows (PowerShell)
+
+```powershell
+tank-cli `
+  --tank-dir C:\path\to\TDT_TANK `
+  --num-subjects 1 `
+  --first-iso _4054 `
+  --first-exp _4654 `
+  --run-ols
+```
+
+#### Windows (cmd.exe)
+
+```cmd
+tank-cli ^
+  --tank-dir C:\path\to\TDT_TANK ^
+  --num-subjects 1 ^
+  --first-iso _4054 ^
+  --first-exp _4654 ^
   --run-ols
 ```
 
@@ -71,6 +140,14 @@ Verify availability:
 python -c "import tdt; print(tdt.__version__)"
 ```
 
+```powershell
+python -c "import tdt; print(tdt.__version__)"
+```
+
+```cmd
+python -c "import tdt; print(tdt.__version__)"
+```
+
 ### Other runtime dependencies
 
 - `numpy`: numeric array handling and output conversion
@@ -98,7 +175,25 @@ This repository is managed with **UV + `pyproject.toml`**.
 
 ### Standard dev commands
 
+#### Unix/macOS
+
 ```bash
+uv sync
+uv run tank-cli --help
+uv run --group tests pytest -q
+```
+
+#### Windows (PowerShell)
+
+```powershell
+uv sync
+uv run tank-cli --help
+uv run --group tests pytest -q
+```
+
+#### Windows (cmd.exe)
+
+```cmd
 uv sync
 uv run tank-cli --help
 uv run --group tests pytest -q
@@ -110,6 +205,14 @@ uv run --group tests pytest -q
 - If another tool needs it, export from the lockfile instead of maintaining it manually:
 
 ```bash
+uv export --format requirements.txt -o requirements.txt
+```
+
+```powershell
+uv export --format requirements.txt -o requirements.txt
+```
+
+```cmd
 uv export --format requirements.txt -o requirements.txt
 ```
 
