@@ -68,7 +68,7 @@ def test_single_subject_exports_csvs(tank_dir: Path, tmp_path: Path) -> None:
     code = main(_base_args(tank_dir, out_dir))
     assert code == 0
 
-    subject_dir = out_dir / "123456_M1_20250101-101500"
+    subject_dir = out_dir / "first"
     assert (subject_dir / "iso_stream.csv").exists()
     assert (subject_dir / "exp_stream.csv").exists()
     assert not (subject_dir / "ttl_stream.csv").exists()
@@ -99,8 +99,8 @@ def test_num_subjects_two_exports_both_subject_dirs(
     code = main(args)
     assert code == 0
 
-    subject1 = out_dir / "subject1_20250101-101500"
-    subject2 = out_dir / "subject2_20250101-101500"
+    subject1 = out_dir / "first"
+    subject2 = out_dir / "second"
     assert (subject1 / "iso_stream.csv").exists()
     assert (subject1 / "exp_stream.csv").exists()
     assert (subject2 / "iso_stream.csv").exists()
@@ -161,7 +161,7 @@ def test_export_epoc_csv_writes_expected_columns(
     code = main(args)
     assert code == 0
 
-    epoc_path = out_dir / "123456_M1_20250101-101500" / "epoc.csv"
+    epoc_path = out_dir / "first" / "epoc.csv"
     epoc_df = pd.read_csv(epoc_path)
     assert list(epoc_df.columns) == ["index", "onset", "offset"]
     assert len(epoc_df) > 0
@@ -175,7 +175,7 @@ def test_run_ols_writes_merged_processed_csv(
     code = main(args)
     assert code == 0
 
-    ols_path = out_dir / "123456_M1_20250101-101500" / "ols_processed.csv"
+    ols_path = out_dir / "first" / "ols_processed.csv"
     assert ols_path.exists()
     ols_df = pd.read_csv(ols_path)
     assert list(ols_df.columns) == [
@@ -187,6 +187,76 @@ def test_run_ols_writes_merged_processed_csv(
         "delta_f_zscore",
     ]
     assert len(ols_df) > 0
+
+
+def test_default_output_root_uses_tank_name_extract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    monkeypatch.setattr(
+        tdt,
+        "read_block",
+        lambda _: {"streams": {"_4054": {}, "_4654": {}}, "epocs": {}},
+    )
+
+    def fake_export_stream_csvs(
+        *, subject_dir: Path, **_: object
+    ) -> None:
+        (subject_dir / "iso_stream.csv").write_text("", encoding="utf-8")
+        (subject_dir / "exp_stream.csv").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli_module, "_export_stream_csvs", fake_export_stream_csvs
+    )
+
+    args = [
+        "--tank-dir",
+        str(tank_dir),
+        "--num-subjects",
+        "1",
+        "--first-iso",
+        "_4054",
+        "--first-exp",
+        "_4654",
+    ]
+    code = main(args)
+    assert code == 0
+
+    out_root = tank_dir.parent / f"{tank_dir.name}_extract"
+    assert (out_root / "first" / "iso_stream.csv").exists()
+    assert (out_root / "first" / "exp_stream.csv").exists()
+
+
+def test_run_metadata_json_contains_version_and_parameters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr(
+        tdt,
+        "read_block",
+        lambda _: {"streams": {"_4054": {}, "_4654": {}}, "epocs": {}},
+    )
+    monkeypatch.setattr(
+        cli_module, "_export_stream_csvs", lambda **_: None
+    )
+    monkeypatch.setattr(cli_module.metadata, "version", lambda _: "9.9.9")
+    code = main(_base_args(tank_dir, out_dir))
+    assert code == 0
+
+    metadata_path = out_dir / "run_metadata.json"
+    assert metadata_path.exists()
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert payload["tank_cli_version"] == "9.9.9"
+    assert "parameters" in payload
+    assert payload["parameters"]["num_subjects"] == 1
+    assert payload["parameters"]["first_iso"] == "_4054"
+    assert payload["parameters"]["first_exp"] == "_4654"
+    assert payload["parameters"]["tank_dir"] == str(tank_dir)
+    assert payload["parameters"]["output_dir"] == str(out_dir)
 
 
 def test_ols_defaults_match_pipeline() -> None:

@@ -113,10 +113,18 @@ tank-cli ^
 By default, outputs are written under:
 
 ```text
-<tank-dir>/archiveflow_cli_output/<subject_id>_<timestamp>/
+<tank-dir-parent>/<tank-dir-name>_extract/
 ```
 
-Common output files:
+If `--output-dir` is provided, that path is used as the root folder instead.
+
+Inside that folder:
+
+- `run_metadata.json` (resolved parameters + `tank_cli_version`)
+- `first/`
+- `second/` (only when `--num-subjects 2`)
+
+Common files in each subject folder:
 
 - `iso_stream.csv`
 - `exp_stream.csv`

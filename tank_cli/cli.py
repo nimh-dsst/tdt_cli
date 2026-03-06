@@ -5,7 +5,7 @@ import json
 import logging
 import sys
 import warnings
-from datetime import datetime
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .ols_processing import run_ols_processing
-from .utils import stream_formatter, tank_dir_parser
+from .utils import stream_formatter
 
 logger = logging.getLogger("tank_cli.cli")
 
@@ -291,15 +291,11 @@ def run_cli(args: argparse.Namespace) -> None:
     output_root = (
         args.output_dir
         if args.output_dir is not None
-        else tank_dir / "archiveflow_cli_output"
+        else tank_dir.parent / f"{tank_dir.name}_extract"
     )
     output_root.mkdir(parents=True, exist_ok=True)
 
-    subject_ids, dt_str = _resolve_subject_ids(
-        tank_dir=tank_dir, num_subjects=args.num_subjects
-    )
-
-    subject_stream_cfgs = _build_subject_configs(args, subject_ids)
+    subject_stream_cfgs = _build_subject_configs(args)
     _validate_stream_names(
         subject_stream_cfgs=subject_stream_cfgs,
         available_streams=available_streams,
@@ -310,9 +306,10 @@ def run_cli(args: argparse.Namespace) -> None:
         epoc_name=args.epoc,
         available_epocs=available_epocs,
     )
+    _write_run_metadata(output_root=output_root, args=args)
 
     for cfg in subject_stream_cfgs:
-        subject_dir = output_root / f"{cfg['subject_id']}_{dt_str}"
+        subject_dir = output_root / cfg["subject_dir_name"]
         subject_dir.mkdir(parents=True, exist_ok=True)
         _export_stream_csvs(
             row_data=row_data,
@@ -397,34 +394,10 @@ def _validate_flag_combinations(args: argparse.Namespace) -> None:
         )
 
 
-def _resolve_subject_ids(
-    *, tank_dir: Path, num_subjects: int
-) -> tuple[list[str], str]:
-    dt_str = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    try:
-        tank_info = tank_dir_parser(tank_dir)
-        tank_dt = tank_info.get("tank_datetime")
-        if isinstance(tank_dt, datetime):
-            dt_str = tank_dt.strftime("%Y%m%d-%H%M%S")
-        subject_ids = tank_info.get("subject_ids")
-        if (
-            isinstance(subject_ids, list)
-            and all(isinstance(s, str) for s in subject_ids)
-            and len(subject_ids) == num_subjects
-        ):
-            return subject_ids, dt_str
-    except ValueError:
-        pass
-
-    return [f"subject{i}" for i in range(1, num_subjects + 1)], dt_str
-
-
-def _build_subject_configs(
-    args: argparse.Namespace, subject_ids: list[str]
-) -> list[dict[str, str]]:
+def _build_subject_configs(args: argparse.Namespace) -> list[dict[str, str]]:
     cfgs = [
         {
-            "subject_id": subject_ids[0],
+            "subject_dir_name": "first",
             "iso_stream": args.first_iso,
             "exp_stream": args.first_exp,
             "ttl_stream": args.first_ttl,
@@ -433,7 +406,7 @@ def _build_subject_configs(
     if args.num_subjects == 2:
         cfgs.append(
             {
-                "subject_id": subject_ids[1],
+                "subject_dir_name": "second",
                 "iso_stream": args.second_iso,
                 "exp_stream": args.second_exp,
                 "ttl_stream": args.second_ttl,
@@ -450,26 +423,59 @@ def _validate_stream_names(
 ) -> None:
     available_set = set(available_streams)
     for cfg in subject_stream_cfgs:
-        subject_id = cfg["subject_id"]
+        subject_name = cfg["subject_dir_name"]
         for key in ("iso_stream", "exp_stream"):
             value = cfg[key]
             if value not in available_set:
                 raise ValueError(
-                    f"Unknown {key} '{value}' for {subject_id}. "
+                    f"Unknown {key} '{value}' for {subject_name}. "
                     f"Available streams: {available_streams}"
                 )
 
         ttl_stream = cfg["ttl_stream"]
         if ttl_stream != "None" and ttl_stream not in available_set:
             raise ValueError(
-                f"Unknown ttl_stream '{ttl_stream}' for {subject_id}. "
+                f"Unknown ttl_stream '{ttl_stream}' for {subject_name}. "
                 f"Available streams: {available_streams}"
             )
         if ttl_filtering and ttl_stream == "None":
             raise ValueError(
                 "TTL filtering requested but ttl stream is 'None' "
-                f"for {subject_id}"
+                f"for {subject_name}"
             )
+
+
+def _write_run_metadata(
+    *, output_root: Path, args: argparse.Namespace
+) -> None:
+    metadata_path = output_root / "run_metadata.json"
+    payload = {
+        "tank_cli_version": _get_tank_cli_version(),
+        "parameters": {
+            key: _to_jsonable(value)
+            for key, value in vars(args).items()
+        },
+    }
+    with metadata_path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+        fh.write("\n")
+
+
+def _get_tank_cli_version() -> str:
+    try:
+        return metadata.version("tdt-cli")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _to_jsonable(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_jsonable(v) for v in value]
+    return value
 
 
 def _validate_epoc_name(
