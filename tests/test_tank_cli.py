@@ -261,6 +261,7 @@ def test_run_metadata_json_contains_version_and_parameters(
     assert payload["parameters"]["first_exp"] == "_4654"
     assert payload["parameters"]["tank_dir"] == str(tank_dir)
     assert payload["parameters"]["output_dir"] == str(out_dir)
+    assert "json_path" not in payload["parameters"]
 
 
 def test_ols_defaults_match_pipeline() -> None:
@@ -410,6 +411,7 @@ def test_run_metadata_json_can_supply_tank_dir_and_processing_flags(
             "tank_cli_version": "9.9.9",
             "parameters": {
                 "tank_dir": str(tank_dir),
+                "json_path": "/tmp/old_run_metadata.json",
                 "num_subjects": 1,
                 "first_iso": "iso",
                 "first_exp": "exp",

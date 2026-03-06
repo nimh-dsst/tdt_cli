@@ -153,6 +153,7 @@ def _merge_json_parameters(
         return args
 
     json_params = _load_json_parameters(json_path)
+    json_params.pop("json_path", None)
     action_by_dest = _build_action_index(parser)
     allowed_keys = set(action_by_dest.keys()) - {"json_path"}
     unknown_keys = sorted(set(json_params.keys()) - allowed_keys)
@@ -543,6 +544,7 @@ def _write_run_metadata(
         "parameters": {
             key: _to_jsonable(value)
             for key, value in vars(args).items()
+            if key != "json_path"
         },
     }
     with metadata_path.open("w", encoding="utf-8") as fh:
