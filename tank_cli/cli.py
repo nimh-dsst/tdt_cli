@@ -103,8 +103,8 @@ def _load_tdt_read_block() -> Any:
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
+            message=r".*invalid escape sequence.*",
             category=SyntaxWarning,
-            module=r"tdt(\..*)?$",
         )
         from tdt import read_block
 
