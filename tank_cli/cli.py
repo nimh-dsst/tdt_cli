@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -96,8 +97,22 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _load_tdt_read_block() -> Any:
+    # tdt currently emits invalid escape-sequence SyntaxWarnings on import
+    # under newer Python versions; suppress those third-party warnings only.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=SyntaxWarning,
+            module=r"tdt(\..*)?$",
+        )
+        from tdt import read_block
+
+    return read_block
+
+
 def run_cli(args: argparse.Namespace) -> None:
-    from tdt import read_block
+    read_block = _load_tdt_read_block()
 
     tank_dir: Path = args.tank_dir
     if not tank_dir.exists():
