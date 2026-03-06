@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 from pathlib import Path
@@ -54,6 +55,12 @@ def _base_args(tank_dir: Path, out_dir: Path) -> list[str]:
         "--output-dir",
         str(out_dir),
     ]
+
+
+def _write_json(tmp_path: Path, payload: object) -> Path:
+    path = tmp_path / "params.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 def test_single_subject_exports_csvs(tank_dir: Path, tmp_path: Path) -> None:
@@ -251,6 +258,203 @@ def test_missing_processing_flags_without_view_streams_fails(
     tank_dir.mkdir()
 
     code = main(["--tank-dir", str(tank_dir)])
+    assert code == 1
+
+
+def test_json_parameters_can_supply_required_processing_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    out_dir = tmp_path / "out"
+    json_path = _write_json(
+        tmp_path,
+        {
+            "num_subjects": 1,
+            "first_iso": "iso",
+            "first_exp": "exp",
+            "output_dir": str(out_dir),
+        },
+    )
+
+    monkeypatch.setattr(
+        tdt,
+        "read_block",
+        lambda _: {"streams": {"iso": {}, "exp": {}}, "epocs": {}},
+    )
+    monkeypatch.setattr(
+        cli_module, "_export_stream_csvs", lambda **_: None
+    )
+
+    code = main(
+        ["--tank-dir", str(tank_dir), "--json", str(json_path)]
+    )
+    assert code == 0
+
+
+def test_json_conflict_with_explicit_cli_value_fails(tmp_path: Path) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    json_path = _write_json(
+        tmp_path,
+        {
+            "num_subjects": 1,
+            "first_iso": "json_iso",
+            "first_exp": "exp",
+        },
+    )
+
+    code = main(
+        [
+            "--tank-dir",
+            str(tank_dir),
+            "--json",
+            str(json_path),
+            "--first-iso",
+            "cli_iso",
+        ]
+    )
+    assert code == 1
+
+
+def test_json_duplicate_equal_to_cli_value_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    json_path = _write_json(
+        tmp_path,
+        {
+            "num_subjects": 1,
+            "first_iso": "iso",
+            "first_exp": "exp",
+        },
+    )
+
+    monkeypatch.setattr(
+        tdt,
+        "read_block",
+        lambda _: {"streams": {"iso": {}, "exp": {}}, "epocs": {}},
+    )
+    monkeypatch.setattr(
+        cli_module, "_export_stream_csvs", lambda **_: None
+    )
+
+    code = main(
+        [
+            "--tank-dir",
+            str(tank_dir),
+            "--json",
+            str(json_path),
+            "--first-iso",
+            "iso",
+            "--num-subjects",
+            "1",
+        ]
+    )
+    assert code == 0
+
+
+def test_json_unknown_key_fails(tmp_path: Path) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    json_path = _write_json(
+        tmp_path,
+        {
+            "num_subjects": 1,
+            "first_iso": "iso",
+            "first_exp": "exp",
+            "unexpected_key": "value",
+        },
+    )
+
+    code = main(["--tank-dir", str(tank_dir), "--json", str(json_path)])
+    assert code == 1
+
+
+def test_json_invalid_typed_value_fails(tmp_path: Path) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    json_path = _write_json(
+        tmp_path,
+        {"num_subjects": "not_an_int"},
+    )
+
+    code = main(["--tank-dir", str(tank_dir), "--json", str(json_path)])
+    assert code == 1
+
+
+def test_json_store_true_booleans_are_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    json_path = _write_json(
+        tmp_path,
+        {
+            "num_subjects": 1,
+            "first_iso": "iso",
+            "first_exp": "exp",
+            "run_ols": True,
+            "export_epoc_csv": True,
+            "epoc": "PtAB",
+        },
+    )
+
+    calls = {"epoc": 0, "ols": 0}
+
+    monkeypatch.setattr(
+        tdt,
+        "read_block",
+        lambda _: {
+            "streams": {"iso": {}, "exp": {}},
+            "epocs": {"PtAB": {}},
+        },
+    )
+    monkeypatch.setattr(
+        cli_module, "_export_stream_csvs", lambda **_: None
+    )
+
+    def fake_export_epoc_csv(**_: object) -> None:
+        calls["epoc"] += 1
+
+    def fake_export_ols_csv(**_: object) -> None:
+        calls["ols"] += 1
+
+    monkeypatch.setattr(cli_module, "_export_epoc_csv", fake_export_epoc_csv)
+    monkeypatch.setattr(cli_module, "_export_ols_csv", fake_export_ols_csv)
+
+    code = main(["--tank-dir", str(tank_dir), "--json", str(json_path)])
+    assert code == 0
+    assert calls["epoc"] == 1
+    assert calls["ols"] == 1
+
+
+def test_json_missing_file_fails(tmp_path: Path) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    missing_json = tmp_path / "missing.json"
+
+    code = main(["--tank-dir", str(tank_dir), "--json", str(missing_json)])
+    assert code == 1
+
+
+def test_json_invalid_content_fails(tmp_path: Path) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    json_path = tmp_path / "params.json"
+    json_path.write_text("{invalid_json", encoding="utf-8")
+
+    code = main(["--tank-dir", str(tank_dir), "--json", str(json_path)])
+    assert code == 1
+
+
+def test_json_top_level_non_object_fails(tmp_path: Path) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    json_path = _write_json(tmp_path, [1, 2, 3])
+
+    code = main(["--tank-dir", str(tank_dir), "--json", str(json_path)])
     assert code == 1
 
 

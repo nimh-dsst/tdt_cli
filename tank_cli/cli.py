@@ -1,7 +1,9 @@
 """Simple argparse CLI to parse one TDT tank and export subject CSVs."""
 
 import argparse
+import json
 import logging
+import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--tank-dir", required=True, type=Path)
+    parser.add_argument(
+        "--json",
+        dest="json_path",
+        type=Path,
+        help="Path to a JSON file containing CLI parameter values.",
+    )
     parser.add_argument(
         "--view-streams",
         action="store_true",
@@ -78,8 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    argv_tokens = list(sys.argv[1:] if argv is None else argv)
     try:
-        args = parser.parse_args(argv)
+        args = parser.parse_args(argv_tokens)
     except SystemExit as exc:
         return int(exc.code)
 
@@ -90,6 +99,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
+        args = _merge_json_parameters(
+            parser=parser, args=args, argv_tokens=argv_tokens
+        )
         run_cli(args)
     except Exception as exc:
         logger.error("%s", exc)
@@ -109,6 +121,151 @@ def _load_tdt_read_block() -> Any:
         from tdt import read_block
 
     return read_block
+
+
+def _merge_json_parameters(
+    *,
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    argv_tokens: list[str],
+) -> argparse.Namespace:
+    json_path = args.json_path
+    if json_path is None:
+        return args
+
+    json_params = _load_json_parameters(json_path)
+    action_by_dest = _build_action_index(parser)
+    allowed_keys = set(action_by_dest.keys()) - {"json_path"}
+    unknown_keys = sorted(set(json_params.keys()) - allowed_keys)
+    if unknown_keys:
+        raise ValueError(
+            "Unknown key(s) in --json file: "
+            + ", ".join(repr(key) for key in unknown_keys)
+        )
+
+    explicit_cli_dests = _explicit_cli_destinations(
+        parser=parser, argv_tokens=argv_tokens
+    )
+    explicit_cli_dests.discard("json_path")
+
+    for key, raw_value in json_params.items():
+        action = action_by_dest[key]
+        coerced_value = _coerce_json_value(
+            key=key, raw_value=raw_value, action=action
+        )
+        if key in explicit_cli_dests:
+            cli_value = getattr(args, key)
+            if cli_value != coerced_value:
+                raise ValueError(
+                    f"Conflict for '{key}': CLI value {cli_value!r} differs "
+                    f"from JSON value {coerced_value!r}"
+                )
+            continue
+        setattr(args, key, coerced_value)
+
+    return args
+
+
+def _load_json_parameters(json_path: Path) -> dict[str, Any]:
+    if not json_path.exists():
+        raise FileNotFoundError(
+            f"JSON parameter file not found: {json_path}"
+        )
+
+    try:
+        with json_path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Invalid JSON in parameter file '{json_path}': {exc.msg}"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"JSON parameter file '{json_path}' must contain "
+            "a top-level JSON object"
+        )
+
+    return payload
+
+
+def _build_action_index(
+    parser: argparse.ArgumentParser,
+) -> dict[str, argparse.Action]:
+    return {
+        action.dest: action
+        for action in parser._actions
+        if action.dest not in {"help"}
+    }
+
+
+def _explicit_cli_destinations(
+    *, parser: argparse.ArgumentParser, argv_tokens: list[str]
+) -> set[str]:
+    option_to_dest: dict[str, str] = {}
+    for action in parser._actions:
+        for option in action.option_strings:
+            option_to_dest[option] = action.dest
+
+    explicit_dests: set[str] = set()
+    for token in argv_tokens:
+        if token == "--":
+            break
+        if not token.startswith("-"):
+            continue
+        option = token.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest is not None:
+            explicit_dests.add(dest)
+    return explicit_dests
+
+
+def _coerce_json_value(
+    *, key: str, raw_value: Any, action: argparse.Action
+) -> Any:
+    if isinstance(action, argparse._StoreTrueAction):
+        if type(raw_value) is not bool:
+            raise ValueError(
+                f"JSON key '{key}' must be a boolean "
+                f"(got {type(raw_value).__name__})"
+            )
+        return raw_value
+
+    if isinstance(action, argparse._StoreFalseAction):
+        if type(raw_value) is not bool:
+            raise ValueError(
+                f"JSON key '{key}' must be a boolean "
+                f"(got {type(raw_value).__name__})"
+            )
+        return raw_value
+
+    if raw_value is None:
+        if action.default is None:
+            return None
+        raise ValueError(
+            f"JSON key '{key}' cannot be null for this option"
+        )
+
+    converter = action.type if action.type is not None else str
+    try:
+        coerced_value = converter(raw_value)
+    except (TypeError, ValueError) as exc:
+        converter_name = getattr(converter, "__name__", str(converter))
+        raise ValueError(
+            f"JSON key '{key}' must be coercible to {converter_name}; "
+            f"got {raw_value!r}"
+        ) from exc
+
+    if (
+        action.choices is not None
+        and coerced_value not in set(action.choices)
+    ):
+        raise ValueError(
+            f"JSON key '{key}' must be one of {list(action.choices)}; "
+            f"got {coerced_value!r}"
+        )
+
+    return coerced_value
 
 
 def run_cli(args: argparse.Namespace) -> None:

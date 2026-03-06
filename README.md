@@ -124,6 +124,42 @@ Common output files:
 - `epoc.csv` (if `--export-epoc-csv`)
 - `ols_processed.csv` (if `--run-ols`)
 
+### JSON parameter file usage
+
+You can provide most run parameters from a JSON file and still set tank path
+explicitly on the CLI:
+
+```bash
+tank-cli --json my_parameters.json --tank-dir /path/to/TDT_TANK
+```
+
+Example `my_parameters.json`:
+
+```json
+{
+  "num_subjects": 1,
+  "first_iso": "_4054",
+  "first_exp": "_4654",
+  "first_ttl": "None",
+  "epoc": "None",
+  "export_epoc_csv": false,
+  "run_ols": true,
+  "smoothing_method": "Downsample then smooth",
+  "smoothing_fraction": 0.002,
+  "new_sampling_rate": 10.0,
+  "ttl_filtering": false,
+  "ttl_start_offset": 0
+}
+```
+
+Rules:
+
+- JSON keys must be `snake_case` argparse destination names.
+- Unknown keys fail fast with an error.
+- If a value is provided in both JSON and CLI:
+  - same value: allowed
+  - different values: error
+
 ## Dependencies (TDT-First)
 
 This package depends on scientific Python libraries, but the **critical dependency is `tdt`**.
