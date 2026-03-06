@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
             "with optional epoc CSV and OLS dF/F outputs."
         )
     )
-    parser.add_argument("--tank-dir", required=True, type=Path)
+    parser.add_argument("--tank-dir", type=Path)
     parser.add_argument(
         "--json",
         dest="json_path",
@@ -173,6 +173,8 @@ def _merge_json_parameters(
             key=key, raw_value=raw_value, action=action
         )
         if key in explicit_cli_dests:
+            if key == "tank_dir":
+                continue
             cli_value = getattr(args, key)
             if cli_value != coerced_value:
                 raise ValueError(
@@ -205,6 +207,25 @@ def _load_json_parameters(json_path: Path) -> dict[str, Any]:
             "a top-level JSON object"
         )
 
+    return _extract_json_parameters(json_path=json_path, payload=payload)
+
+
+def _extract_json_parameters(
+    *, json_path: Path, payload: dict[str, Any]
+) -> dict[str, Any]:
+    if "parameters" in payload or "tank_cli_version" in payload:
+        if "parameters" not in payload:
+            raise ValueError(
+                f"Run metadata file '{json_path}' must include "
+                "'parameters'"
+            )
+        parameters = payload["parameters"]
+        if not isinstance(parameters, dict):
+            raise ValueError(
+                f"Run metadata file '{json_path}' must contain "
+                "an object at key 'parameters'"
+            )
+        return parameters
     return payload
 
 
@@ -290,7 +311,11 @@ def _coerce_json_value(
 def run_cli(args: argparse.Namespace) -> None:
     read_block = _load_tdt_read_block()
 
-    tank_dir: Path = args.tank_dir
+    tank_dir: Path | None = args.tank_dir
+    if tank_dir is None:
+        raise ValueError(
+            "--tank-dir is required unless provided in --json"
+        )
     if not tank_dir.exists():
         raise FileNotFoundError(f"Tank directory not found: {tank_dir}")
 

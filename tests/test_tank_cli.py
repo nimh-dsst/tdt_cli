@@ -398,6 +398,96 @@ def test_json_parameters_can_supply_required_processing_flags(
     assert code == 0
 
 
+def test_run_metadata_json_can_supply_tank_dir_and_processing_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tank_dir = tmp_path / "json_tank"
+    tank_dir.mkdir()
+    out_dir = tmp_path / "out"
+    json_path = _write_json(
+        tmp_path,
+        {
+            "tank_cli_version": "9.9.9",
+            "parameters": {
+                "tank_dir": str(tank_dir),
+                "num_subjects": 1,
+                "first_iso": "iso",
+                "first_exp": "exp",
+                "output_dir": str(out_dir),
+            },
+        },
+    )
+
+    calls: dict[str, str] = {}
+
+    def fake_read_block(path: str) -> dict[str, dict[str, object]]:
+        calls["tank_path"] = path
+        return {"streams": {"iso": {}, "exp": {}}, "epocs": {}}
+
+    monkeypatch.setattr(tdt, "read_block", fake_read_block)
+    monkeypatch.setattr(
+        cli_module, "_export_stream_csvs", lambda **_: None
+    )
+
+    code = main(["--json", str(json_path)])
+    assert code == 0
+    assert calls["tank_path"] == str(tank_dir)
+
+
+def test_cli_tank_dir_overrides_run_metadata_tank_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    json_tank_dir = tmp_path / "json_tank"
+    json_tank_dir.mkdir()
+    cli_tank_dir = tmp_path / "cli_tank"
+    cli_tank_dir.mkdir()
+    out_dir = tmp_path / "out"
+    json_path = _write_json(
+        tmp_path,
+        {
+            "tank_cli_version": "9.9.9",
+            "parameters": {
+                "tank_dir": str(json_tank_dir),
+                "num_subjects": 1,
+                "first_iso": "iso",
+                "first_exp": "exp",
+                "output_dir": str(out_dir),
+            },
+        },
+    )
+
+    calls: dict[str, str] = {}
+
+    def fake_read_block(path: str) -> dict[str, dict[str, object]]:
+        calls["tank_path"] = path
+        return {"streams": {"iso": {}, "exp": {}}, "epocs": {}}
+
+    monkeypatch.setattr(tdt, "read_block", fake_read_block)
+    monkeypatch.setattr(
+        cli_module, "_export_stream_csvs", lambda **_: None
+    )
+
+    code = main(
+        ["--json", str(json_path), "--tank-dir", str(cli_tank_dir)]
+    )
+    assert code == 0
+    assert calls["tank_path"] == str(cli_tank_dir)
+
+    metadata_path = out_dir / "run_metadata.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert payload["parameters"]["tank_dir"] == str(cli_tank_dir)
+
+
+def test_missing_tank_dir_in_cli_and_json_fails(tmp_path: Path) -> None:
+    json_path = _write_json(
+        tmp_path,
+        {"num_subjects": 1, "first_iso": "iso", "first_exp": "exp"},
+    )
+
+    code = main(["--json", str(json_path)])
+    assert code == 1
+
+
 def test_json_conflict_with_explicit_cli_value_fails(tmp_path: Path) -> None:
     tank_dir = tmp_path / "dummy_tank"
     tank_dir.mkdir()
@@ -559,6 +649,15 @@ def test_json_top_level_non_object_fails(tmp_path: Path) -> None:
     tank_dir = tmp_path / "dummy_tank"
     tank_dir.mkdir()
     json_path = _write_json(tmp_path, [1, 2, 3])
+
+    code = main(["--tank-dir", str(tank_dir), "--json", str(json_path)])
+    assert code == 1
+
+
+def test_run_metadata_without_parameters_fails(tmp_path: Path) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+    json_path = _write_json(tmp_path, {"tank_cli_version": "9.9.9"})
 
     code = main(["--tank-dir", str(tank_dir), "--json", str(json_path)])
     assert code == 1

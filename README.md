@@ -151,11 +151,29 @@ Common files in each subject folder:
 
 ### JSON parameter file usage
 
-You can provide most run parameters from a JSON file and still set tank path
-explicitly on the CLI:
+You can provide most run parameters from a JSON file and optionally set tank
+path explicitly on the CLI:
 
 ```bash
 tank-cli --json my_parameters.json --tank-dir /path/to/TDT_TANK
+```
+
+`--json` accepts either:
+
+- A flat parameter object (`my_parameters.json`).
+- A prior run's `run_metadata.json` object, where parameters are under
+  `parameters`.
+
+To rerun from prior metadata:
+
+```bash
+tank-cli --json /path/to/previous_extract/run_metadata.json
+```
+
+To reuse prior metadata but override tank directory for this run:
+
+```bash
+tank-cli --json /path/to/previous_extract/run_metadata.json --tank-dir /new/tank/path
 ```
 
 Example `my_parameters.json`:
@@ -181,9 +199,10 @@ Rules:
 
 - JSON keys must be `snake_case` argparse destination names.
 - Unknown keys fail fast with an error.
+- `--tank-dir` can come from JSON or CLI.
 - If a value is provided in both JSON and CLI:
-  - same value: allowed
-  - different values: error
+  - for `tank_dir`: CLI value wins
+  - for all other options: same value is allowed, different values error
 
 ## Dependencies (TDT-First)
 
