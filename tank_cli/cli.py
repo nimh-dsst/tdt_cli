@@ -29,11 +29,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tank-dir", required=True, type=Path)
     parser.add_argument(
-        "--num-subjects", required=True, type=int, choices=[1, 2]
+        "--view-streams",
+        action="store_true",
+        help="List available stream names in the tank and exit.",
     )
+    parser.add_argument("--num-subjects", type=int, choices=[1, 2])
 
-    parser.add_argument("--first-iso", required=True)
-    parser.add_argument("--first-exp", required=True)
+    parser.add_argument("--first-iso")
+    parser.add_argument("--first-exp")
     parser.add_argument("--first-ttl", default="None")
 
     parser.add_argument("--second-iso")
@@ -99,6 +102,13 @@ def run_cli(args: argparse.Namespace) -> None:
     tank_dir: Path = args.tank_dir
     if not tank_dir.exists():
         raise FileNotFoundError(f"Tank directory not found: {tank_dir}")
+
+    if args.view_streams:
+        row_data = read_block(str(tank_dir))
+        available_streams = sorted(row_data["streams"].keys())
+        for stream_name in available_streams:
+            print(stream_name)
+        return
 
     _validate_flag_combinations(args)
 
@@ -168,6 +178,19 @@ def run_cli(args: argparse.Namespace) -> None:
 
 
 def _validate_flag_combinations(args: argparse.Namespace) -> None:
+    if args.num_subjects is None:
+        raise ValueError(
+            "--num-subjects is required unless --view-streams is set"
+        )
+    if args.first_iso is None:
+        raise ValueError(
+            "--first-iso is required unless --view-streams is set"
+        )
+    if args.first_exp is None:
+        raise ValueError(
+            "--first-exp is required unless --view-streams is set"
+        )
+
     if args.num_subjects == 1:
         if (
             args.second_iso is not None

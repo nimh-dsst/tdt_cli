@@ -220,6 +220,40 @@ def test_unknown_stream_name_fails(tank_dir: Path, tmp_path: Path) -> None:
     assert code == 1
 
 
+def test_view_streams_prints_available_stream_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+
+    def fake_read_block(_: str) -> dict[str, dict[str, object]]:
+        return {
+            "streams": {
+                "_4654": {"data": np.array([1.0]), "fs": 10.0},
+                "_4054": {"data": np.array([1.0]), "fs": 10.0},
+                "Wav1": {"data": np.array([1.0]), "fs": 10.0},
+            }
+        }
+
+    monkeypatch.setattr(tdt, "read_block", fake_read_block)
+
+    code = main(["--tank-dir", str(tank_dir), "--view-streams"])
+    assert code == 0
+    assert capsys.readouterr().out.strip().splitlines() == sorted(
+        ["_4054", "_4654", "Wav1"]
+    )
+
+
+def test_missing_processing_flags_without_view_streams_fails(
+    tmp_path: Path,
+) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+
+    code = main(["--tank-dir", str(tank_dir)])
+    assert code == 1
+
+
 def test_export_ols_rejects_mismatched_stream_fs(tmp_path: Path) -> None:
     row_data = {
         "streams": {
