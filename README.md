@@ -149,6 +149,32 @@ Common files in each subject folder:
     time (with `--ttl-start-offset` applied backward in downsampled samples).
   - When `--ttl-filtering` is not enabled, epoc TTL source does not alter OLS trim behavior.
 
+### TTL filtering behavior: epoc first-onset vs TTL binary stream
+
+When `--ttl-filtering` is enabled, behavior depends on TTL source type:
+
+- **TTL stream source** (`ttl_source_type=stream`):
+  - TTL is downsampled to `--new-sampling-rate`.
+  - Values must be binary (`0` or `1`) after downsampling.
+  - A boolean mask is built from `TTL == 1`.
+  - `--ttl-start-offset N` marks the `N` downsampled samples before the first
+    `1` as included.
+  - OLS arrays are filtered by that mask.
+
+- **Epoc source** (`ttl_source_type=epoc`):
+  - OLS is run first on the full processed timeline (no TTL mask).
+  - The first epoc onset is taken as `min(onset)`.
+  - That onset is mapped to the processed time grid with
+    `np.searchsorted(time_array, onset, side="left")` (first sample at/after onset).
+  - All OLS arrays are trimmed from that index forward.
+  - `--ttl-start-offset N` moves trim start back by `N` downsampled samples.
+
+Notes:
+
+- Epoc filtering uses only the first onset as the trim anchor.
+- Offset units are downsampled samples: at `--new-sampling-rate 10`, `N=1` is
+  `0.1s`, `N=5` is `0.5s`.
+
 ### JSON parameter file usage
 
 You can provide most run parameters from a JSON file and optionally set tank
