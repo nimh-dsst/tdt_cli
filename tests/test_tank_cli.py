@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -24,13 +25,16 @@ from tank_cli.cli import _export_ols_csv
 def ensure_demo_data() -> Path:
     """Download TDT demo data into the repo root if missing."""
     repo_root = Path(__file__).resolve().parents[1]
+    demo_path = repo_root / "data" / "FiPho-180416"
+    if demo_path.exists():
+        return demo_path
     cwd = Path.cwd()
     os.chdir(repo_root)
     try:
         tdt.download_demo_data()
     finally:
         os.chdir(cwd)
-    return repo_root / "data" / "FiPho-180416"
+    return demo_path
 
 
 @pytest.fixture
@@ -321,6 +325,38 @@ def test_view_streams_prints_available_stream_names(
     )
 
 
+def test_view_epocs_prints_available_epoc_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tank_dir = tmp_path / "dummy_tank"
+    tank_dir.mkdir()
+
+    def fake_read_block(_: str) -> dict[str, dict[str, object]]:
+        return {
+            "streams": {"_4054": {"data": np.array([1.0]), "fs": 10.0}},
+            "epocs": {
+                "PtAB": {
+                    "onset": np.array([1.0]),
+                    "offset": np.array([2.0]),
+                    "data": np.array([1.0]),
+                },
+                "PuAB": {
+                    "onset": np.array([3.0]),
+                    "offset": np.array([4.0]),
+                    "data": np.array([2.0]),
+                },
+            },
+        }
+
+    monkeypatch.setattr(tdt, "read_block", fake_read_block)
+
+    code = main(["--tank-dir", str(tank_dir), "--view-epocs"])
+    assert code == 0
+    assert capsys.readouterr().out.strip().splitlines() == sorted(
+        ["PtAB", "PuAB"]
+    )
+
+
 def test_missing_processing_flags_without_view_streams_fails(
     tmp_path: Path,
 ) -> None:
@@ -528,13 +564,73 @@ def test_json_top_level_non_object_fails(tmp_path: Path) -> None:
     assert code == 1
 
 
+def test_epoc_ttl_source_writes_marker_not_ttl_stream(
+    tank_dir: Path, tmp_path: Path
+) -> None:
+    out_dir = tmp_path / "out"
+    args = _base_args(tank_dir, out_dir) + ["--first-ttl", "PtAB"]
+    code = main(args)
+    assert code == 0
+
+    subject_dir = out_dir / "first"
+    assert not (subject_dir / "ttl_stream.csv").exists()
+    marker_path = subject_dir / "epoc_marker.csv"
+    assert marker_path.exists()
+    marker_df = pd.read_csv(marker_path)
+    assert list(marker_df.columns) == [
+        "onset",
+        "offset",
+        "data",
+        "first_onset_for_ttl",
+    ]
+    assert marker_df["first_onset_for_ttl"].astype(bool).sum() == 1
+
+
+def test_stream_ttl_source_writes_stream_not_marker(
+    tank_dir: Path, tmp_path: Path
+) -> None:
+    out_dir = tmp_path / "out"
+    args = _base_args(tank_dir, out_dir) + ["--first-ttl", "_4054"]
+    code = main(args)
+    assert code == 0
+
+    subject_dir = out_dir / "first"
+    assert (subject_dir / "ttl_stream.csv").exists()
+    assert not (subject_dir / "epoc_marker.csv").exists()
+
+
+def test_unknown_ttl_source_lists_streams_and_epocs(
+    tank_dir: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    out_dir = tmp_path / "out"
+    caplog.set_level(logging.ERROR, logger="tank_cli.cli")
+
+    args = _base_args(tank_dir, out_dir) + ["--first-ttl", "missing_ttl"]
+    code = main(args)
+    assert code == 1
+    assert "Unknown ttl source 'missing_ttl'" in caplog.text
+    assert "Available streams:" in caplog.text
+    assert "Available epocs:" in caplog.text
+
+
+def test_ttl_name_collision_prefers_stream() -> None:
+    source_type, source_name = cli_module._resolve_ttl_source(
+        ttl_name="ttl",
+        available_stream_set={"ttl", "iso"},
+        available_epoc_set={"ttl", "PtAB"},
+    )
+    assert source_type == "stream"
+    assert source_name == "ttl"
+
+
 def test_export_ols_rejects_mismatched_stream_fs(tmp_path: Path) -> None:
     row_data = {
         "streams": {
             "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
             "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
             "ttl": {"data": np.array([0.0, 1.0], dtype=np.float32), "fs": 5.0},
-        }
+        },
+        "epocs": {},
     }
 
     with pytest.raises(ValueError, match="sampling rates must match"):
@@ -543,7 +639,8 @@ def test_export_ols_rejects_mismatched_stream_fs(tmp_path: Path) -> None:
             subject_dir=tmp_path,
             iso_stream="iso",
             exp_stream="exp",
-            ttl_stream="ttl",
+            ttl_source_type="stream",
+            ttl_source_name="ttl",
             smoothing_method=DEFAULT_SMOOTHING_METHOD,
             smoothing_fraction=DEFAULT_SMOOTHING_FRACTION,
             new_sampling_rate=DEFAULT_NEW_SAMPLING_RATE,
@@ -560,7 +657,8 @@ def test_export_ols_allows_matching_stream_fs(
             "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
             "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
             "ttl": {"data": np.array([0.0, 1.0], dtype=np.float32), "fs": 10.0},
-        }
+        },
+        "epocs": {},
     }
 
     def fake_run_ols_processing(**_: object) -> dict[str, np.ndarray]:
@@ -584,7 +682,8 @@ def test_export_ols_allows_matching_stream_fs(
         subject_dir=tmp_path,
         iso_stream="iso",
         exp_stream="exp",
-        ttl_stream="ttl",
+        ttl_source_type="stream",
+        ttl_source_name="ttl",
         smoothing_method=DEFAULT_SMOOTHING_METHOD,
         smoothing_fraction=DEFAULT_SMOOTHING_FRACTION,
         new_sampling_rate=DEFAULT_NEW_SAMPLING_RATE,
@@ -592,3 +691,215 @@ def test_export_ols_allows_matching_stream_fs(
         ttl_start_offset=DEFAULT_TTL_START_OFFSET,
     )
     assert (tmp_path / "ols_processed.csv").exists()
+
+
+def test_export_ols_epoc_ttl_filtering_trims_from_first_onset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row_data = {
+        "streams": {
+            "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+        },
+        "epocs": {
+            "PtAB": {
+                "onset": np.array([1.2, 3.0], dtype=np.float64),
+                "offset": np.array([1.4, 3.2], dtype=np.float64),
+                "data": np.array([1.0, 2.0], dtype=np.float64),
+            }
+        },
+    }
+    called: dict[str, object] = {}
+
+    def fake_run_ols_processing(**kwargs: object) -> dict[str, np.ndarray]:
+        called.update(kwargs)
+        signal = np.arange(0.0, 6.0, 0.5, dtype=np.float64)
+        return {
+            "time_array": signal.copy(),
+            "smoothed_exp": signal.copy(),
+            "smoothed_iso": signal.copy(),
+            "delta_f": signal.copy(),
+            "delta_f_norm": signal.copy(),
+            "delta_f_zscore": signal.copy(),
+        }
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_ols_processing",
+        fake_run_ols_processing,
+    )
+
+    _export_ols_csv(
+        row_data=row_data,
+        subject_dir=tmp_path,
+        iso_stream="iso",
+        exp_stream="exp",
+        ttl_source_type="epoc",
+        ttl_source_name="PtAB",
+        smoothing_method=DEFAULT_SMOOTHING_METHOD,
+        smoothing_fraction=DEFAULT_SMOOTHING_FRACTION,
+        new_sampling_rate=DEFAULT_NEW_SAMPLING_RATE,
+        ttl_filtering=True,
+        ttl_start_offset=1,
+    )
+
+    assert called["ttl_filtering"] is False
+    assert called["ttl_start_offset"] == 0
+    output_df = pd.read_csv(tmp_path / "ols_processed.csv")
+    assert output_df["time"].iloc[0] == pytest.approx(1.0)
+
+
+def test_export_ols_epoc_source_without_filtering_does_not_epoc_trim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row_data = {
+        "streams": {
+            "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+        },
+        "epocs": {
+            "PtAB": {
+                "onset": np.array([1.2], dtype=np.float64),
+                "offset": np.array([1.4], dtype=np.float64),
+                "data": np.array([1.0], dtype=np.float64),
+            }
+        },
+    }
+    called: dict[str, object] = {}
+
+    def fake_run_ols_processing(**kwargs: object) -> dict[str, np.ndarray]:
+        called.update(kwargs)
+        signal = np.arange(0.0, 2.0, 0.5, dtype=np.float64)
+        return {
+            "time_array": signal.copy(),
+            "smoothed_exp": signal.copy(),
+            "smoothed_iso": signal.copy(),
+            "delta_f": signal.copy(),
+            "delta_f_norm": signal.copy(),
+            "delta_f_zscore": signal.copy(),
+        }
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_ols_processing",
+        fake_run_ols_processing,
+    )
+
+    _export_ols_csv(
+        row_data=row_data,
+        subject_dir=tmp_path,
+        iso_stream="iso",
+        exp_stream="exp",
+        ttl_source_type="epoc",
+        ttl_source_name="PtAB",
+        smoothing_method=DEFAULT_SMOOTHING_METHOD,
+        smoothing_fraction=DEFAULT_SMOOTHING_FRACTION,
+        new_sampling_rate=DEFAULT_NEW_SAMPLING_RATE,
+        ttl_filtering=False,
+        ttl_start_offset=2,
+    )
+
+    assert called["ttl_filtering"] is False
+    assert called["ttl_start_offset"] == 2
+    output_df = pd.read_csv(tmp_path / "ols_processed.csv")
+    assert output_df["time"].iloc[0] == pytest.approx(0.0)
+
+
+def test_export_ols_epoc_ttl_filtering_rejects_empty_onset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row_data = {
+        "streams": {
+            "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+        },
+        "epocs": {
+            "PtAB": {
+                "onset": np.array([], dtype=np.float64),
+                "offset": np.array([], dtype=np.float64),
+                "data": np.array([], dtype=np.float64),
+            }
+        },
+    }
+
+    def fake_run_ols_processing(**_: object) -> dict[str, np.ndarray]:
+        signal = np.arange(0.0, 2.0, 0.5, dtype=np.float64)
+        return {
+            "time_array": signal.copy(),
+            "smoothed_exp": signal.copy(),
+            "smoothed_iso": signal.copy(),
+            "delta_f": signal.copy(),
+            "delta_f_norm": signal.copy(),
+            "delta_f_zscore": signal.copy(),
+        }
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_ols_processing",
+        fake_run_ols_processing,
+    )
+
+    with pytest.raises(ValueError, match="empty onset array"):
+        _export_ols_csv(
+            row_data=row_data,
+            subject_dir=tmp_path,
+            iso_stream="iso",
+            exp_stream="exp",
+            ttl_source_type="epoc",
+            ttl_source_name="PtAB",
+            smoothing_method=DEFAULT_SMOOTHING_METHOD,
+            smoothing_fraction=DEFAULT_SMOOTHING_FRACTION,
+            new_sampling_rate=DEFAULT_NEW_SAMPLING_RATE,
+            ttl_filtering=True,
+            ttl_start_offset=0,
+        )
+
+
+def test_export_ols_epoc_ttl_filtering_rejects_onset_outside_timeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row_data = {
+        "streams": {
+            "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+        },
+        "epocs": {
+            "PtAB": {
+                "onset": np.array([99.0], dtype=np.float64),
+                "offset": np.array([100.0], dtype=np.float64),
+                "data": np.array([1.0], dtype=np.float64),
+            }
+        },
+    }
+
+    def fake_run_ols_processing(**_: object) -> dict[str, np.ndarray]:
+        signal = np.arange(0.0, 2.0, 0.5, dtype=np.float64)
+        return {
+            "time_array": signal.copy(),
+            "smoothed_exp": signal.copy(),
+            "smoothed_iso": signal.copy(),
+            "delta_f": signal.copy(),
+            "delta_f_norm": signal.copy(),
+            "delta_f_zscore": signal.copy(),
+        }
+
+    monkeypatch.setattr(
+        cli_module,
+        "run_ols_processing",
+        fake_run_ols_processing,
+    )
+
+    with pytest.raises(ValueError, match="outside processed OLS time range"):
+        _export_ols_csv(
+            row_data=row_data,
+            subject_dir=tmp_path,
+            iso_stream="iso",
+            exp_stream="exp",
+            ttl_source_type="epoc",
+            ttl_source_name="PtAB",
+            smoothing_method=DEFAULT_SMOOTHING_METHOD,
+            smoothing_fraction=DEFAULT_SMOOTHING_FRACTION,
+            new_sampling_rate=DEFAULT_NEW_SAMPLING_RATE,
+            ttl_filtering=True,
+            ttl_start_offset=0,
+        )

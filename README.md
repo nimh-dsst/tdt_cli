@@ -128,9 +128,26 @@ Common files in each subject folder:
 
 - `iso_stream.csv`
 - `exp_stream.csv`
-- `ttl_stream.csv` (if TTL stream provided)
+- `ttl_stream.csv` (if TTL source is a stream)
+- `epoc_marker.csv` (if TTL source is an epoc)
 - `epoc.csv` (if `--export-epoc-csv`)
 - `ols_processed.csv` (if `--run-ols`)
+
+### Listing available tank names
+
+- `--view-streams`: print available stream names and exit.
+- `--view-epocs`: print available epoc names and exit.
+
+### TTL source selection (`--first-ttl`, `--second-ttl`)
+
+- Allowed values: `None`, a stream name, or an epoc name.
+- Resolution order is automatic: stream names are matched first, then epoc names.
+- For epoc TTL source:
+  - `epoc_marker.csv` is exported per subject with columns
+    `onset`, `offset`, `data`, and `first_onset_for_ttl`.
+  - When `--ttl-filtering` is enabled, OLS trimming starts from the first epoc onset
+    time (with `--ttl-start-offset` applied backward in downsampled samples).
+  - When `--ttl-filtering` is not enabled, epoc TTL source does not alter OLS trim behavior.
 
 ### JSON parameter file usage
 

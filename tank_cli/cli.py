@@ -42,15 +42,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List available stream names in the tank and exit.",
     )
+    parser.add_argument(
+        "--view-epocs",
+        action="store_true",
+        help="List available epoc names in the tank and exit.",
+    )
     parser.add_argument("--num-subjects", type=int, choices=[1, 2])
 
     parser.add_argument("--first-iso")
     parser.add_argument("--first-exp")
-    parser.add_argument("--first-ttl", default="None")
+    parser.add_argument(
+        "--first-ttl",
+        default="None",
+        help=(
+            "TTL source for first subject: stream name, epoc name, "
+            "or 'None'. Stream name is preferred if both exist."
+        ),
+    )
 
     parser.add_argument("--second-iso")
     parser.add_argument("--second-exp")
-    parser.add_argument("--second-ttl", default="None")
+    parser.add_argument(
+        "--second-ttl",
+        default="None",
+        help=(
+            "TTL source for second subject: stream name, epoc name, "
+            "or 'None'. Stream name is preferred if both exist."
+        ),
+    )
 
     parser.add_argument("--epoc", default="None")
     parser.add_argument("--export-epoc-csv", action="store_true")
@@ -275,11 +294,16 @@ def run_cli(args: argparse.Namespace) -> None:
     if not tank_dir.exists():
         raise FileNotFoundError(f"Tank directory not found: {tank_dir}")
 
-    if args.view_streams:
+    if args.view_streams or args.view_epocs:
         row_data = read_block(str(tank_dir))
-        available_streams = sorted(row_data["streams"].keys())
-        for stream_name in available_streams:
-            print(stream_name)
+        if args.view_streams:
+            available_streams = sorted(row_data["streams"].keys())
+            for stream_name in available_streams:
+                print(stream_name)
+        if args.view_epocs:
+            available_epocs = sorted(row_data["epocs"].keys())
+            for epoc_name in available_epocs:
+                print(epoc_name)
         return
 
     _validate_flag_combinations(args)
@@ -296,9 +320,10 @@ def run_cli(args: argparse.Namespace) -> None:
     output_root.mkdir(parents=True, exist_ok=True)
 
     subject_stream_cfgs = _build_subject_configs(args)
-    _validate_stream_names(
+    resolved_subject_cfgs = _resolve_subject_configs(
         subject_stream_cfgs=subject_stream_cfgs,
         available_streams=available_streams,
+        available_epocs=available_epocs,
         ttl_filtering=args.ttl_filtering,
     )
     _validate_epoc_name(
@@ -308,7 +333,7 @@ def run_cli(args: argparse.Namespace) -> None:
     )
     _write_run_metadata(output_root=output_root, args=args)
 
-    for cfg in subject_stream_cfgs:
+    for cfg in resolved_subject_cfgs:
         subject_dir = output_root / cfg["subject_dir_name"]
         subject_dir.mkdir(parents=True, exist_ok=True)
         _export_stream_csvs(
@@ -316,8 +341,15 @@ def run_cli(args: argparse.Namespace) -> None:
             subject_dir=subject_dir,
             iso_stream=cfg["iso_stream"],
             exp_stream=cfg["exp_stream"],
-            ttl_stream=cfg["ttl_stream"],
+            ttl_source_type=cfg["ttl_source_type"],
+            ttl_source_name=cfg["ttl_source_name"],
         )
+        if cfg["ttl_source_type"] == "epoc":
+            _export_epoc_marker_csv(
+                row_data=row_data,
+                epoc_name=cfg["ttl_source_name"],
+                subject_dir=subject_dir,
+            )
         if args.export_epoc_csv and args.epoc != "None":
             _export_epoc_csv(
                 row_data=row_data,
@@ -330,7 +362,8 @@ def run_cli(args: argparse.Namespace) -> None:
                 subject_dir=subject_dir,
                 iso_stream=cfg["iso_stream"],
                 exp_stream=cfg["exp_stream"],
-                ttl_stream=cfg["ttl_stream"],
+                ttl_source_type=cfg["ttl_source_type"],
+                ttl_source_name=cfg["ttl_source_name"],
                 smoothing_method=args.smoothing_method,
                 smoothing_fraction=args.smoothing_fraction,
                 new_sampling_rate=args.new_sampling_rate,
@@ -349,15 +382,18 @@ def run_cli(args: argparse.Namespace) -> None:
 def _validate_flag_combinations(args: argparse.Namespace) -> None:
     if args.num_subjects is None:
         raise ValueError(
-            "--num-subjects is required unless --view-streams is set"
+            "--num-subjects is required unless --view-streams or "
+            "--view-epocs is set"
         )
     if args.first_iso is None:
         raise ValueError(
-            "--first-iso is required unless --view-streams is set"
+            "--first-iso is required unless --view-streams or "
+            "--view-epocs is set"
         )
     if args.first_exp is None:
         raise ValueError(
-            "--first-exp is required unless --view-streams is set"
+            "--first-exp is required unless --view-streams or "
+            "--view-epocs is set"
         )
 
     if args.num_subjects == 1:
@@ -400,7 +436,7 @@ def _build_subject_configs(args: argparse.Namespace) -> list[dict[str, str]]:
             "subject_dir_name": "first",
             "iso_stream": args.first_iso,
             "exp_stream": args.first_exp,
-            "ttl_stream": args.first_ttl,
+            "ttl_name": args.first_ttl,
         }
     ]
     if args.num_subjects == 2:
@@ -409,40 +445,68 @@ def _build_subject_configs(args: argparse.Namespace) -> list[dict[str, str]]:
                 "subject_dir_name": "second",
                 "iso_stream": args.second_iso,
                 "exp_stream": args.second_exp,
-                "ttl_stream": args.second_ttl,
+                "ttl_name": args.second_ttl,
             }
         )
     return cfgs
 
 
-def _validate_stream_names(
+def _resolve_subject_configs(
     *,
     subject_stream_cfgs: list[dict[str, str]],
     available_streams: list[str],
+    available_epocs: list[str],
     ttl_filtering: bool,
-) -> None:
-    available_set = set(available_streams)
+) -> list[dict[str, str]]:
+    available_stream_set = set(available_streams)
+    available_epoc_set = set(available_epocs)
+    resolved_cfgs: list[dict[str, str]] = []
     for cfg in subject_stream_cfgs:
         subject_name = cfg["subject_dir_name"]
         for key in ("iso_stream", "exp_stream"):
             value = cfg[key]
-            if value not in available_set:
+            if value not in available_stream_set:
                 raise ValueError(
                     f"Unknown {key} '{value}' for {subject_name}. "
                     f"Available streams: {available_streams}"
                 )
 
-        ttl_stream = cfg["ttl_stream"]
-        if ttl_stream != "None" and ttl_stream not in available_set:
+        ttl_source_type, ttl_source_name = _resolve_ttl_source(
+            ttl_name=cfg["ttl_name"],
+            available_stream_set=available_stream_set,
+            available_epoc_set=available_epoc_set,
+        )
+        if ttl_source_type == "unknown":
             raise ValueError(
-                f"Unknown ttl_stream '{ttl_stream}' for {subject_name}. "
-                f"Available streams: {available_streams}"
+                f"Unknown ttl source '{cfg['ttl_name']}' for {subject_name}. "
+                f"Available streams: {available_streams}. "
+                f"Available epocs: {available_epocs}"
             )
-        if ttl_filtering and ttl_stream == "None":
+        if ttl_filtering and ttl_source_type == "none":
             raise ValueError(
-                "TTL filtering requested but ttl stream is 'None' "
+                "TTL filtering requested but ttl source is 'None' "
                 f"for {subject_name}"
             )
+        resolved_cfg = dict(cfg)
+        resolved_cfg["ttl_source_type"] = ttl_source_type
+        resolved_cfg["ttl_source_name"] = ttl_source_name
+        resolved_cfgs.append(resolved_cfg)
+    return resolved_cfgs
+
+
+def _resolve_ttl_source(
+    *,
+    ttl_name: str,
+    available_stream_set: set[str],
+    available_epoc_set: set[str],
+) -> tuple[str, str]:
+    if ttl_name == "None":
+        return "none", "None"
+    if ttl_name in available_stream_set:
+        return "stream", ttl_name
+    if ttl_name in available_epoc_set:
+        return "epoc", ttl_name
+    return "unknown", ttl_name
 
 
 def _write_run_metadata(
@@ -497,15 +561,16 @@ def _export_stream_csvs(
     subject_dir: Path,
     iso_stream: str,
     exp_stream: str,
-    ttl_stream: str,
+    ttl_source_type: str,
+    ttl_source_name: str,
 ) -> None:
     info = row_data.info
     iso_df = stream_formatter(info, row_data["streams"][iso_stream])
     exp_df = stream_formatter(info, row_data["streams"][exp_stream])
     iso_df.to_csv(subject_dir / "iso_stream.csv", index=False)
     exp_df.to_csv(subject_dir / "exp_stream.csv", index=False)
-    if ttl_stream != "None":
-        ttl_df = stream_formatter(info, row_data["streams"][ttl_stream])
+    if ttl_source_type == "stream":
+        ttl_df = stream_formatter(info, row_data["streams"][ttl_source_name])
         ttl_df.to_csv(subject_dir / "ttl_stream.csv", index=False)
 
 
@@ -519,13 +584,121 @@ def _export_epoc_csv(
     epoc_df.to_csv(subject_dir / "epoc.csv", index=False)
 
 
+def _load_epoc_events(
+    *, row_data: Any, epoc_name: str
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    epocs = row_data["epocs"]
+    if epoc_name not in set(epocs.keys()):
+        raise ValueError(f"Unknown epoc '{epoc_name}' for TTL source")
+    epoc = epocs[epoc_name]
+    try:
+        onset = np.asarray(epoc["onset"], dtype=np.float64)
+        offset = np.asarray(epoc["offset"], dtype=np.float64)
+        data = np.asarray(epoc["data"], dtype=np.float64)
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"Epoc '{epoc_name}' must contain onset, offset, and data arrays"
+        ) from exc
+    if onset.size == 0:
+        raise ValueError(
+            f"Epoc '{epoc_name}' has an empty onset array for TTL source"
+        )
+    if not (onset.size == offset.size == data.size):
+        raise ValueError(
+            f"Epoc '{epoc_name}' onset/offset/data lengths must match "
+            f"(got onset={onset.size}, offset={offset.size}, data={data.size})"
+        )
+    return onset, offset, data
+
+
+def _first_epoc_onset(
+    *, row_data: Any, epoc_name: str
+) -> tuple[float, int]:
+    onset, _, _ = _load_epoc_events(row_data=row_data, epoc_name=epoc_name)
+    first_idx = int(np.argmin(onset))
+    return float(onset[first_idx]), first_idx
+
+
+def _export_epoc_marker_csv(
+    *, row_data: Any, epoc_name: str, subject_dir: Path
+) -> None:
+    onset, offset, data = _load_epoc_events(
+        row_data=row_data, epoc_name=epoc_name
+    )
+    _, first_idx = _first_epoc_onset(row_data=row_data, epoc_name=epoc_name)
+    first_onset_for_ttl = np.zeros(onset.size, dtype=bool)
+    first_onset_for_ttl[first_idx] = True
+    marker_df = pd.DataFrame(
+        {
+            "onset": onset,
+            "offset": offset,
+            "data": data,
+            "first_onset_for_ttl": first_onset_for_ttl,
+        }
+    )
+    marker_df.to_csv(subject_dir / "epoc_marker.csv", index=False)
+
+
+def _trim_ols_results_for_epoc_ttl(
+    *,
+    results: dict[str, Any],
+    first_onset_sec: float,
+    ttl_start_offset: int,
+) -> dict[str, Any]:
+    time_array = np.asarray(results["time_array"], dtype=np.float64)
+    if time_array.size == 0:
+        raise ValueError("OLS output time array is empty")
+    if (
+        first_onset_sec < float(time_array[0])
+        or first_onset_sec > float(time_array[-1])
+    ):
+        raise ValueError(
+            "First epoc onset is outside processed OLS time range "
+            f"(onset={first_onset_sec}, range=[{time_array[0]}, "
+            f"{time_array[-1]}])"
+        )
+
+    first_idx = int(np.searchsorted(time_array, first_onset_sec, side="left"))
+    if first_idx >= time_array.size:
+        raise ValueError(
+            "Unable to map first epoc onset to processed OLS timeline"
+        )
+    start_idx = max(0, first_idx - ttl_start_offset)
+
+    trim_keys = (
+        "time_array",
+        "smoothed_exp",
+        "smoothed_iso",
+        "delta_f",
+        "delta_f_norm",
+        "delta_f_zscore",
+    )
+    for key in trim_keys:
+        values = np.asarray(results[key])
+        if values.size != time_array.size:
+            raise ValueError(
+                f"OLS result key '{key}' length does not match time array "
+                f"(key={values.size}, time={time_array.size})"
+            )
+        results[key] = values[start_idx:]
+
+    if (
+        np.asarray(results["smoothed_exp"]).size < 2
+        or np.asarray(results["smoothed_iso"]).size < 2
+    ):
+        raise ValueError("Not enough data points after epoc-based TTL trim")
+
+    return results
+
+
 def _export_ols_csv(
     *,
     row_data: Any,
     subject_dir: Path,
     iso_stream: str,
     exp_stream: str,
-    ttl_stream: str,
+    ttl_source_type: str,
+    ttl_source_name: str,
     smoothing_method: str,
     smoothing_fraction: float,
     new_sampling_rate: float,
@@ -538,8 +711,10 @@ def _export_ols_csv(
     exp_fs = float(exp["fs"])
     ttl_data = None
     ttl_fs = None
-    if ttl_stream != "None":
-        ttl = row_data["streams"][ttl_stream]
+    if ttl_filtering and ttl_source_type == "none":
+        raise ValueError("TTL filtering requires a non-None TTL source")
+    if ttl_source_type == "stream":
+        ttl = row_data["streams"][ttl_source_name]
         ttl_data = ttl["data"]
         ttl_fs = float(ttl["fs"])
         if not (iso_fs == exp_fs == ttl_fs):
@@ -547,6 +722,11 @@ def _export_ols_csv(
                 "iso, exp, and ttl stream sampling rates must match "
                 f"(got iso={iso_fs}, exp={exp_fs}, ttl={ttl_fs})"
             )
+
+    run_ttl_filtering = ttl_filtering and ttl_source_type == "stream"
+    run_ttl_start_offset = ttl_start_offset
+    if ttl_filtering and ttl_source_type == "epoc":
+        run_ttl_start_offset = 0
 
     results = run_ols_processing(
         iso_data=iso["data"],
@@ -558,9 +738,19 @@ def _export_ols_csv(
         new_sampling_rate=new_sampling_rate,
         ttl_stream_data=ttl_data,
         ttl_fs=ttl_fs,
-        ttl_filtering=ttl_filtering,
-        ttl_start_offset=ttl_start_offset,
+        ttl_filtering=run_ttl_filtering,
+        ttl_start_offset=run_ttl_start_offset,
     )
+    if ttl_filtering and ttl_source_type == "epoc":
+        first_onset_sec, _ = _first_epoc_onset(
+            row_data=row_data, epoc_name=ttl_source_name
+        )
+        results = _trim_ols_results_for_epoc_ttl(
+            results=results,
+            first_onset_sec=first_onset_sec,
+            ttl_start_offset=ttl_start_offset,
+        )
+
     output_df = pd.DataFrame(
         {
             "time": np.asarray(results["time_array"], dtype=np.float64),
