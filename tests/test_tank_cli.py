@@ -797,10 +797,11 @@ def test_export_ols_allows_matching_stream_fs(
 def test_export_ols_epoc_ttl_filtering_trims_from_first_onset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    signal = np.arange(0.0, 10.0, 0.1, dtype=np.float32)
     row_data = {
         "streams": {
-            "iso": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
-            "exp": {"data": np.array([1.0, 2.0], dtype=np.float32), "fs": 10.0},
+            "iso": {"data": signal, "fs": 10.0},
+            "exp": {"data": signal, "fs": 10.0},
         },
         "epocs": {
             "PtAB": {
@@ -844,10 +845,14 @@ def test_export_ols_epoc_ttl_filtering_trims_from_first_onset(
         ttl_start_offset=1,
     )
 
-    assert called["ttl_filtering"] is False
-    assert called["ttl_start_offset"] == 0
+    assert called["ttl_filtering"] is True
+    assert called["ttl_start_offset"] == 1
+    assert called["ttl_fs"] == pytest.approx(10.0)
+    ttl_stream = np.asarray(called["ttl_stream_data"], dtype=np.float64)
+    assert np.all(ttl_stream[:12] == 0.0)
+    assert np.all(ttl_stream[12:] == 1.0)
     output_df = pd.read_csv(tmp_path / "ols_processed.csv")
-    assert output_df["time"].iloc[0] == pytest.approx(1.0)
+    assert output_df["time"].iloc[0] == pytest.approx(0.0)
 
 
 def test_export_ols_epoc_source_without_filtering_does_not_epoc_trim(
@@ -902,6 +907,7 @@ def test_export_ols_epoc_source_without_filtering_does_not_epoc_trim(
 
     assert called["ttl_filtering"] is False
     assert called["ttl_start_offset"] == 2
+    assert called["ttl_stream_data"] is None
     output_df = pd.read_csv(tmp_path / "ols_processed.csv")
     assert output_df["time"].iloc[0] == pytest.approx(0.0)
 
@@ -990,7 +996,9 @@ def test_export_ols_epoc_ttl_filtering_rejects_onset_outside_timeline(
         fake_run_ols_processing,
     )
 
-    with pytest.raises(ValueError, match="outside processed OLS time range"):
+    with pytest.raises(
+        ValueError, match="No epoc intervals overlap the raw signal timeline"
+    ):
         _export_ols_csv(
             row_data=row_data,
             subject_dir=tmp_path,

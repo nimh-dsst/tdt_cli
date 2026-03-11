@@ -666,56 +666,44 @@ def _export_epoc_marker_csv(
     marker_df.to_csv(subject_dir / "epoc_marker.csv", index=False)
 
 
-def _trim_ols_results_for_epoc_ttl(
+def _build_epoc_ttl_stream(
     *,
-    results: dict[str, Any],
-    first_onset_sec: float,
-    ttl_start_offset: int,
-) -> dict[str, Any]:
-    time_array = np.asarray(results["time_array"], dtype=np.float64)
-    if time_array.size == 0:
-        raise ValueError("OLS output time array is empty")
-    if (
-        first_onset_sec < float(time_array[0])
-        or first_onset_sec > float(time_array[-1])
-    ):
-        raise ValueError(
-            "First epoc onset is outside processed OLS time range "
-            f"(onset={first_onset_sec}, range=[{time_array[0]}, "
-            f"{time_array[-1]}])"
-        )
+    row_data: Any,
+    epoc_name: str,
+    fs: float,
+    signal_length: int,
+) -> np.ndarray:
+    onset, offset, _ = _load_epoc_events(row_data=row_data, epoc_name=epoc_name)
+    ttl_stream = np.zeros(signal_length, dtype=np.float32)
+    if signal_length <= 0:
+        raise ValueError("Signal length must be > 0 for epoc TTL conversion")
 
-    first_idx = int(np.searchsorted(time_array, first_onset_sec, side="left"))
-    if first_idx >= time_array.size:
-        raise ValueError(
-            "Unable to map first epoc onset to processed OLS timeline"
-        )
-    start_idx = max(0, first_idx - ttl_start_offset)
+    onset_idx = np.floor(onset * fs).astype(np.int64)
+    offset_idx = np.ceil(offset * fs).astype(np.int64)
 
-    trim_keys = (
-        "time_array",
-        "smoothed_exp",
-        "smoothed_iso",
-        "delta_f",
-        "delta_f_norm",
-        "delta_f_zscore",
-    )
-    for key in trim_keys:
-        values = np.asarray(results[key])
-        if values.size != time_array.size:
+    for start_raw, end_raw in zip(onset_idx, offset_idx):
+        start = int(np.clip(start_raw, 0, signal_length))
+        end = int(np.clip(end_raw, 0, signal_length))
+        if end < start:
             raise ValueError(
-                f"OLS result key '{key}' length does not match time array "
-                f"(key={values.size}, time={time_array.size})"
+                "Epoc onset/offset produced an invalid interval for TTL source "
+                f"(start={start}, end={end})"
             )
-        results[key] = values[start_idx:]
+        if end > start:
+            ttl_stream[start:end] = 1.0
 
-    if (
-        np.asarray(results["smoothed_exp"]).size < 2
-        or np.asarray(results["smoothed_iso"]).size < 2
-    ):
-        raise ValueError("Not enough data points after epoc-based TTL trim")
+    # Match pipeline behavior: when multiple epoc pulses exist, retain data
+    # from the first onset through the end of the recording.
+    rising_edges = np.where(np.diff(ttl_stream.astype(np.int32)) == 1)[0]
+    if rising_edges.size > 1:
+        ttl_stream = np.maximum.accumulate(ttl_stream)
 
-    return results
+    if not np.any(ttl_stream == 1.0):
+        raise ValueError(
+            "No epoc intervals overlap the raw signal timeline for TTL source"
+        )
+
+    return ttl_stream
 
 
 def _export_ols_csv(
@@ -749,11 +737,14 @@ def _export_ols_csv(
                 "iso, exp, and ttl stream sampling rates must match "
                 f"(got iso={iso_fs}, exp={exp_fs}, ttl={ttl_fs})"
             )
-
-    run_ttl_filtering = ttl_filtering and ttl_source_type == "stream"
-    run_ttl_start_offset = ttl_start_offset
     if ttl_filtering and ttl_source_type == "epoc":
-        run_ttl_start_offset = 0
+        ttl_data = _build_epoc_ttl_stream(
+            row_data=row_data,
+            epoc_name=ttl_source_name,
+            fs=exp_fs,
+            signal_length=int(np.asarray(exp["data"]).size),
+        )
+        ttl_fs = exp_fs
 
     results = run_ols_processing(
         iso_data=iso["data"],
@@ -765,18 +756,9 @@ def _export_ols_csv(
         new_sampling_rate=new_sampling_rate,
         ttl_stream_data=ttl_data,
         ttl_fs=ttl_fs,
-        ttl_filtering=run_ttl_filtering,
-        ttl_start_offset=run_ttl_start_offset,
+        ttl_filtering=ttl_filtering,
+        ttl_start_offset=ttl_start_offset,
     )
-    if ttl_filtering and ttl_source_type == "epoc":
-        first_onset_sec, _ = _first_epoc_onset(
-            row_data=row_data, epoc_name=ttl_source_name
-        )
-        results = _trim_ols_results_for_epoc_ttl(
-            results=results,
-            first_onset_sec=first_onset_sec,
-            ttl_start_offset=ttl_start_offset,
-        )
 
     output_df = pd.DataFrame(
         {

@@ -210,3 +210,5 @@ __marimo__/
 /data
 data.zip
 .python-version
+/test_data
+.DS_store
